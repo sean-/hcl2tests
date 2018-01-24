@@ -43,7 +43,8 @@
     "hcl",
     "hcl/hclsyntax",
     "hcl/json",
-    "hclparse"
+    "hclparse",
+    "hclwrite"
   ]
   revision = "f87600a7d93ee66499e0566bc9ce0bb43e91a28a"
 
@@ -87,6 +88,21 @@
 
 [[projects]]
   branch = "master"
+  name = "golang.org/x/crypto"
+  packages = ["ssh/terminal"]
+  revision = "3d37316aaa6bd9929127ac9a527abf408178ea7b"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/sys"
+  packages = [
+    "unix",
+    "windows"
+  ]
+  revision = "af50095a40f9041b3b38960738837185c26e9419"
+
+[[projects]]
+  branch = "master"
   name = "golang.org/x/text"
   packages = [
     "internal/gen",
@@ -101,6 +117,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "df1846cf21fbfdb2728fdb6a33cb3c957021d7bd803e82392a084ac7acfebeb2"
+  inputs-digest = "a325622c63f7fa7aad5c5687398102b35862e9417b3cac59f4bac70a4973f344"
   solver-name = "gps-cdcl"
   solver-version = 1
