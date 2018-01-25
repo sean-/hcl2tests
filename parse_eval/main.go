@@ -13,6 +13,9 @@ import (
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 	"github.com/zclconf/go-cty/cty/function/stdlib"
+	"gonum.org/v1/gonum/graph"
+	"gonum.org/v1/gonum/graph/simple"
+	"gonum.org/v1/gonum/graph/topo"
 )
 
 func main() {
@@ -30,8 +33,31 @@ testcase {
   }
 
   step {
+    stepname = "post-trailer"
+    after = ["trailer"]
+  }
+
+  step {
+    id = "trailer"
+    stepname = "trailer"
+    after = ["1", "s2", "4"]
+  }
+
+  step {
     id = "s2"
     stepname = "step2"
+    before = ["1"]
+  }
+
+  step {
+    stepname = "step3"
+    after = ["s2"]
+  }
+
+  step {
+    id = "pre-trailer"
+    stepname = "pre-trailer"
+    before = ["trailer"]
   }
 
   fixture {
@@ -54,6 +80,10 @@ type TestStep struct {
 	StepNum uint64
 	Config  hcl.Body
 	id      string
+
+	caseNode  graph.Node
+	runBefore []string
+	runAfter  []string
 }
 
 type TestCase struct {
@@ -62,6 +92,10 @@ type TestCase struct {
 	TestSteps []*TestStep
 	Fixtures  []*TestCaseFixture
 	StepMap   map[string]*TestStep
+
+	stepDepGraph    *simple.DirectedGraph
+	stepDepRoot     graph.Node
+	stepDepGraphMap map[graph.Node]*TestStep
 }
 
 type TestCaseFixture struct {
@@ -76,9 +110,11 @@ type TestSuite struct {
 
 func hcl2TestSchema() {
 	type rawTestStep struct {
-		Name   string   `hcl:"stepname"`
-		ID     *string  `hcl:"id,attr"`
-		Config hcl.Body `hcl:",remain"`
+		Name      string    `hcl:"stepname"`
+		ID        *string   `hcl:"id,attr"`
+		RunBefore *[]string `hcl:"before,attr"`
+		RunAfter  *[]string `hcl:"after,attr"`
+		Config    hcl.Body  `hcl:",remain"`
 	}
 
 	type rawTestCaseFixture struct {
@@ -128,11 +164,14 @@ func hcl2TestSchema() {
 		ts.TestCases = make([]*TestCase, len(rts.TestCases))
 		for i, rtc := range rts.TestCases {
 			tc := &TestCase{
-				Name:      rtc.Name,
-				Fixtures:  []*TestCaseFixture{},
-				TestSteps: make([]*TestStep, 0, len(rtc.TestSteps)),
-				StepMap:   make(map[string]*TestStep, len(rtc.TestSteps)),
+				Name:            rtc.Name,
+				Fixtures:        []*TestCaseFixture{},
+				TestSteps:       make([]*TestStep, 0, len(rtc.TestSteps)),
+				StepMap:         make(map[string]*TestStep, len(rtc.TestSteps)),
+				stepDepGraph:    simple.NewDirectedGraph(),
+				stepDepGraphMap: make(map[graph.Node]*TestStep, len(rtc.TestSteps)),
 			}
+			tc.stepDepRoot = tc.stepDepGraph.NewNode()
 
 			if rtc.Enabled == nil || *rtc.Enabled == true {
 				tc.Enabled = true
@@ -172,6 +211,14 @@ func hcl2TestSchema() {
 					Name:    rawStep.Name,
 					Config:  rawStep.Config,
 					StepNum: stepNum,
+
+					caseNode: tc.stepDepGraph.NewNode(),
+				}
+				if rawStep.RunBefore != nil {
+					step.runBefore = *rawStep.RunBefore
+				}
+				if rawStep.RunAfter != nil {
+					step.runAfter = *rawStep.RunAfter
 				}
 
 				if rawStep.ID == nil || strings.TrimSpace(*rawStep.ID) == "" {
@@ -190,16 +237,102 @@ func hcl2TestSchema() {
 					if diag != nil {
 						panic(fmt.Sprintf("%+v", diag))
 					}
-					q.Q("k", k, "v", vty.AsString())
-					spew.Printf("step: suite=%q case=%q step.id=%q attr=%q value.name=%q value=%q\n", ts.Name, tc.Name, step.id, k, v.Name, vty.AsString())
+					q.Q("k", k, "v", vty.GoString())
+					spew.Printf("step: suite=%q case=%q step.id=%q attr=%q value.name=%q value=%q\n", ts.Name, tc.Name, step.id, k, v.Name, vty.GoString())
 				}
 
 				tc.StepMap[step.id] = step
 				tc.TestSteps = append(tc.TestSteps, step)
+				tc.stepDepGraph.AddNode(step.caseNode)
+				tc.stepDepGraphMap[step.caseNode] = step
+			}
+
+			unconnectedSteps := make(map[graph.Node]*TestStep, len(tc.TestSteps))
+			for _, step := range tc.TestSteps {
+				unconnectedSteps[step.caseNode] = step
+			}
+
+			stepConnected := func(step *TestStep) {
+				delete(unconnectedSteps, step.caseNode)
+			}
+
+			// Register dependencies
+			for _, step := range tc.TestSteps {
+				for _, before := range step.runBefore {
+					s, found := tc.StepMap[before]
+					if !found {
+						fmt.Printf("step.id=%q's before dependency %q not found", step.id, before)
+						continue
+					}
+
+					e := tc.stepDepGraph.NewEdge(step.caseNode, s.caseNode)
+					tc.stepDepGraph.SetEdge(e)
+					stepConnected(step)
+					stepConnected(s)
+				}
+
+				for _, after := range step.runAfter {
+					s, found := tc.StepMap[after]
+					if !found {
+						fmt.Printf("step.id=%q's after dependency %q not found", step.id, after)
+						continue
+					}
+
+					e := tc.stepDepGraph.NewEdge(s.caseNode, step.caseNode)
+					tc.stepDepGraph.SetEdge(e)
+					stepConnected(step)
+					stepConnected(s)
+				}
+			}
+
+			// Ensure every node is part of the graph, otherwise add it to the nop
+			// root node.
+			rootID := tc.stepDepGraph.NewNode()
+			tc.stepDepGraph.AddNode(rootID)
+			tc.stepDepGraphMap[rootID] = nil
+			for _, step := range unconnectedSteps {
+				e := tc.stepDepGraph.NewEdge(rootID, step.caseNode)
+				tc.stepDepGraph.SetEdge(e)
 			}
 
 			for k, v := range tc.StepMap {
 				spew.Printf("step map: suite=%q case=%q step.id=%q step.name=%q\n", ts.Name, tc.Name, k, v.Name)
+			}
+
+			nodeCycles := topo.DirectedCyclesIn(tc.stepDepGraph)
+			if len(nodeCycles) > 0 {
+				for _, cycle := range nodeCycles {
+					fmt.Printf("ERROR: cycle found between nodes: %+v\n", cycle)
+				}
+
+				fmt.Printf("WARNING: Skipping test case %q\n", tc.Name)
+				continue
+			}
+
+			// orderedNodes, err := topo.SortStabilized(tc.stepDepGraph, nil)
+			orderedNodes, err := topo.Sort(tc.stepDepGraph)
+			if err != nil {
+				panic(fmt.Sprintf("bad: %v", err))
+			}
+
+			if len(orderedNodes) < 1 {
+				panic(fmt.Sprintf("should have more than 0 ordered nodes"))
+				continue
+			}
+			fmt.Printf("%d nodes\n", len(orderedNodes)-1) // omit the root node
+
+			for _, stepDepID := range orderedNodes {
+				s, found := tc.stepDepGraphMap[stepDepID]
+				if !found {
+					panic(fmt.Sprintf("bad: node id not found %v in case %q", stepDepID, tc.Name))
+				}
+
+				if s == nil {
+					// root node
+					continue
+				}
+
+				fmt.Printf("executing suite=%q case=%q step(id=%q, name=%q)\n", ts.Name, tc.Name, s.id, s.Name)
 			}
 
 			ts.TestCases[i] = tc
