@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/hashicorp/hcl2/gohcl"
@@ -28,6 +30,7 @@ testcase {
   }
 
   step {
+    id = "s2"
     stepname = "step2"
   }
 
@@ -47,8 +50,10 @@ testcase {
 `)
 
 type TestStep struct {
-	Name   string
-	Config hcl.Body
+	Name    string
+	StepNum uint64
+	Config  hcl.Body
+	id      string
 }
 
 type TestCase struct {
@@ -56,6 +61,7 @@ type TestCase struct {
 	Enabled   bool
 	TestSteps []*TestStep
 	Fixtures  []*TestCaseFixture
+	StepMap   map[string]*TestStep
 }
 
 type TestCaseFixture struct {
@@ -71,6 +77,7 @@ type TestSuite struct {
 func hcl2TestSchema() {
 	type rawTestStep struct {
 		Name   string   `hcl:"stepname"`
+		ID     *string  `hcl:"id,attr"`
 		Config hcl.Body `hcl:",remain"`
 	}
 
@@ -124,6 +131,7 @@ func hcl2TestSchema() {
 				Name:      rtc.Name,
 				Fixtures:  []*TestCaseFixture{},
 				TestSteps: make([]*TestStep, 0, len(rtc.TestSteps)),
+				StepMap:   make(map[string]*TestStep, len(rtc.TestSteps)),
 			}
 
 			if rtc.Enabled == nil || *rtc.Enabled == true {
@@ -133,13 +141,13 @@ func hcl2TestSchema() {
 			}
 
 			tc.Fixtures = make([]*TestCaseFixture, 0, len(rtc.Fixtures))
-			for _, fixture := range rtc.Fixtures {
-				tc.Fixtures = append(tc.Fixtures, &TestCaseFixture{
-					Name:   fixture.Name,
-					Config: fixture.Config,
-				})
+			for _, rawFixture := range rtc.Fixtures {
+				fixture := &TestCaseFixture{
+					Name:   rawFixture.Name,
+					Config: rawFixture.Config,
+				}
 
-				attrs, d := fixture.Config.JustAttributes()
+				attrs, d := rawFixture.Config.JustAttributes()
 				if d != nil {
 					panic(fmt.Sprintf("%+v", d))
 				}
@@ -151,20 +159,26 @@ func hcl2TestSchema() {
 					}
 					q.Q("k", k, "v", vty.AsString())
 
-					// The following dump prints:
-					//
-					// 10) "some_rando"
-					// (string) (len=10) "blah BAR 5"
-					spew.Dump(k, vty.AsString())
+					spew.Printf("fixture: suite=%q case=%q fixture.name=%q attr=%q value.name=%q value=%q\n", ts.Name, tc.Name, fixture.Name, k, v.Name, vty.AsString())
 				}
+
+				tc.Fixtures = append(tc.Fixtures, fixture)
 			}
 
 			tc.TestSteps = make([]*TestStep, 0, len(rtc.TestSteps))
-			for _, step := range rtc.TestSteps {
-				tc.TestSteps = append(tc.TestSteps, &TestStep{
-					Name:   step.Name,
-					Config: step.Config,
-				})
+			for i, rawStep := range rtc.TestSteps {
+				stepNum := uint64(i) + 1
+				step := &TestStep{
+					Name:    rawStep.Name,
+					Config:  rawStep.Config,
+					StepNum: stepNum,
+				}
+
+				if rawStep.ID == nil || strings.TrimSpace(*rawStep.ID) == "" {
+					step.id = strconv.FormatUint(stepNum, 10)
+				} else {
+					step.id = *rawStep.ID
+				}
 
 				attrs, d := step.Config.JustAttributes()
 				if d != nil {
@@ -177,8 +191,15 @@ func hcl2TestSchema() {
 						panic(fmt.Sprintf("%+v", diag))
 					}
 					q.Q("k", k, "v", vty.AsString())
-					spew.Dump(k, vty.AsString())
+					spew.Printf("step: suite=%q case=%q step.id=%q attr=%q value.name=%q value=%q\n", ts.Name, tc.Name, step.id, k, v.Name, vty.AsString())
 				}
+
+				tc.StepMap[step.id] = step
+				tc.TestSteps = append(tc.TestSteps, step)
+			}
+
+			for k, v := range tc.StepMap {
+				spew.Printf("step map: suite=%q case=%q step.id=%q step.name=%q\n", ts.Name, tc.Name, k, v.Name)
 			}
 
 			ts.TestCases[i] = tc
