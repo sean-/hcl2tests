@@ -99,7 +99,7 @@
     "unix",
     "windows"
   ]
-  revision = "af50095a40f9041b3b38960738837185c26e9419"
+  revision = "03467258950d845cd1877eab69461b98e8c09219"
 
 [[projects]]
   branch = "master"
@@ -114,9 +114,36 @@
   ]
   revision = "e19ae1496984b1c655b8044a65c0300a3c878dd3"
 
+[[projects]]
+  branch = "master"
+  name = "gonum.org/v1/gonum"
+  packages = [
+    "blas",
+    "blas/blas64",
+    "blas/gonum",
+    "floats",
+    "graph",
+    "graph/internal/linear",
+    "graph/internal/ordered",
+    "graph/internal/set",
+    "graph/internal/uid",
+    "graph/simple",
+    "graph/topo",
+    "graph/traverse",
+    "internal/asm/c128",
+    "internal/asm/f32",
+    "internal/asm/f64",
+    "internal/math32",
+    "lapack",
+    "lapack/gonum",
+    "lapack/lapack64",
+    "mat"
+  ]
+  revision = "287df04a63144ae62d3f7a85dc313836f665c85b"
+
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "a325622c63f7fa7aad5c5687398102b35862e9417b3cac59f4bac70a4973f344"
+  inputs-digest = "b0dbb8ff2b1f0953d405224e1eef61152c613577056df0d657f11aa630ba7098"
   solver-name = "gps-cdcl"
   solver-version = 1
